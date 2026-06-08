@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+APP_NAME = "EQGPS"
+DEFAULT_LOG_PATH = Path(r"C:\Users\Public\EQ_P99\Logs\eqlog_Nanantwo_P1999Green 20260604day.txt")
+DEFAULT_MAP_DIR = Path(r"C:\Users\nanan\Development\EQGPS\map_files")
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def user_config_dir() -> Path:
+    root = os.environ.get("APPDATA")
+    if root:
+        return Path(root) / APP_NAME
+    return Path.home() / ".eqgps"
+
+
+class Settings:
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = Path(path) if path else user_config_dir() / "settings.json"
+        self.data: dict[str, Any] = {}
+        self.load()
+
+    def load(self) -> None:
+        if self.path.exists():
+            try:
+                self.data = json.loads(self.path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                self.data = {}
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+
+    @property
+    def log_path(self) -> Path:
+        value = self.data.get("last_log_path")
+        return Path(value) if value else DEFAULT_LOG_PATH
+
+    @log_path.setter
+    def log_path(self, value: str | Path) -> None:
+        path = Path(value)
+        self.data["last_log_path"] = str(path)
+        self.data["last_log_dir"] = str(path.parent)
+        self.save()
+
+    @property
+    def last_log_dir(self) -> Path:
+        value = self.data.get("last_log_dir")
+        if value:
+            return Path(value)
+        return self.log_path.parent
+
+    @property
+    def map_dir(self) -> Path:
+        value = self.data.get("map_dir")
+        return Path(value) if value else DEFAULT_MAP_DIR
+
+    def get_layer_settings(self, zone_key: str, layer_name: str) -> dict[str, Any]:
+        layers = self.data.setdefault("layer_settings", {})
+        zone = layers.setdefault(zone_key, {})
+        return zone.setdefault(layer_name, {"visible": True, "opacity": 100})
+
+    def set_layer_settings(self, zone_key: str, layer_name: str, visible: bool, opacity: int) -> None:
+        layers = self.data.setdefault("layer_settings", {})
+        zone = layers.setdefault(zone_key, {})
+        zone[layer_name] = {"visible": bool(visible), "opacity": int(opacity)}
+        self.save()
+
+    def remember_window_geometry(self, geometry: str) -> None:
+        self.data["window_geometry"] = geometry
+        self.save()
+
+    @property
+    def window_geometry(self) -> str | None:
+        value = self.data.get("window_geometry")
+        return str(value) if value else None
+
+    def get_marker_data(self) -> dict[str, Any]:
+        markers = self.data.get("marker_store")
+        if not isinstance(markers, dict):
+            markers = self.data.get("markers")
+        return markers if isinstance(markers, dict) else {}
+
+    def set_marker_data(self, marker_data: dict[str, Any]) -> None:
+        self.data["marker_store"] = marker_data
+        self.save()
+
+    def get_zone_calibration(self, zone_key: str | None) -> dict[str, float]:
+        if not zone_key:
+            return {"offset_x": 0.0, "offset_y": 0.0}
+        calibrations = self.data.setdefault("zone_calibrations", {})
+        entry = calibrations.get(zone_key, {}) if isinstance(calibrations, dict) else {}
+        return {
+            "offset_x": _safe_float(entry.get("offset_x", 0.0)) if isinstance(entry, dict) else 0.0,
+            "offset_y": _safe_float(entry.get("offset_y", 0.0)) if isinstance(entry, dict) else 0.0,
+        }
+
+    def set_zone_calibration(self, zone_key: str, calibration: dict[str, float]) -> None:
+        calibrations = self.data.setdefault("zone_calibrations", {})
+        if not isinstance(calibrations, dict):
+            calibrations = {}
+            self.data["zone_calibrations"] = calibrations
+        calibrations[zone_key] = {"offset_x": float(calibration.get("offset_x", 0.0)), "offset_y": float(calibration.get("offset_y", 0.0))}
+        self.save()
+
+    def get_elevation_filter(self) -> dict[str, Any]:
+        data = self.data.get("elevation_filter", {})
+        return data if isinstance(data, dict) else {}
+
+    def set_elevation_filter(self, enabled: bool, above: float, below: float) -> None:
+        self.data["elevation_filter"] = {"enabled": bool(enabled), "above": float(above), "below": float(below)}
+        self.save()
+
+    def get_marker_timer_minutes(self, default: int = 18) -> int:
+        try:
+            return max(1, int(self.data.get("marker_timer_minutes", default)))
+        except (TypeError, ValueError):
+            return default
+
+    def set_marker_timer_minutes(self, minutes: int) -> None:
+        self.data["marker_timer_minutes"] = max(1, int(minutes))
+        self.save()
+
+    def get_timer_sound_settings(self, default_path: str = "") -> dict[str, Any]:
+        data = self.data.get("timer_sound", {})
+        if not isinstance(data, dict):
+            data = {}
+        return {
+            "enabled": bool(data.get("enabled", True)),
+            "path": str(data.get("path") or default_path),
+        }
+
+    def set_timer_sound_settings(self, enabled: bool, path: str) -> None:
+        self.data["timer_sound"] = {"enabled": bool(enabled), "path": str(path)}
+        self.save()
+
+    @property
+    def always_on_top(self) -> bool:
+        return bool(self.data.get("always_on_top", False))
+
+    @always_on_top.setter
+    def always_on_top(self, value: bool) -> None:
+        self.data["always_on_top"] = bool(value)
+        self.save()
+
+    @property
+    def mini_mode(self) -> bool:
+        return bool(self.data.get("mini_mode", False))
+
+    @mini_mode.setter
+    def mini_mode(self, value: bool) -> None:
+        self.data["mini_mode"] = bool(value)
+        self.save()
+
+    @property
+    def transparency_mode(self) -> bool:
+        return bool(self.data.get("transparency_mode", False))
+
+    @transparency_mode.setter
+    def transparency_mode(self, value: bool) -> None:
+        self.data["transparency_mode"] = bool(value)
+        self.save()
+
+    @property
+    def ui_chrome_opacity(self) -> int:
+        try:
+            opacity = int(round(float(self.data.get("ui_chrome_opacity", 100))))
+        except (TypeError, ValueError):
+            opacity = 100
+        return max(0, min(100, opacity))
+
+    @ui_chrome_opacity.setter
+    def ui_chrome_opacity(self, value: int | float | str) -> None:
+        try:
+            opacity = int(round(float(value)))
+        except (TypeError, ValueError):
+            opacity = 100
+        self.data["ui_chrome_opacity"] = max(0, min(100, opacity))
+        self.save()
+
+    @property
+    def borderless_overlay_mode(self) -> bool:
+        return bool(self.data.get("borderless_overlay_mode", False))
+
+    @borderless_overlay_mode.setter
+    def borderless_overlay_mode(self, value: bool) -> None:
+        self.data["borderless_overlay_mode"] = bool(value)
+        self.save()
+
+    @property
+    def overlay_click_through(self) -> bool:
+        return bool(self.data.get("overlay_click_through", False))
+
+    @overlay_click_through.setter
+    def overlay_click_through(self, value: bool) -> None:
+        self.data["overlay_click_through"] = bool(value)
+        self.save()
+
+    @property
+    def overlay_lock_window(self) -> bool:
+        return bool(self.data.get("overlay_lock_window", False))
+
+    @overlay_lock_window.setter
+    def overlay_lock_window(self, value: bool) -> None:
+        self.data["overlay_lock_window"] = bool(value)
+        self.save()
