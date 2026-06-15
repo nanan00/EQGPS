@@ -19,12 +19,13 @@ from .log_watcher import LogTailer
 from .map_keys import MapKeys
 from .map_loader import MapLayer, ParsedMap, discover_zone_layers, parse_map_file
 from .markers import (
-    DEFAULT_TIMER_MINUTES,
+    DEFAULT_TIMER_SECONDS,
     Marker,
     MarkerStore,
     clear_marker_timer,
+    format_timer_duration,
     marker_timer_state,
-    normalize_timer_minutes,
+    normalize_timer_seconds,
     reset_marker_timer,
     reset_marker_timer_paused,
     update_marker_details,
@@ -105,7 +106,7 @@ class EQGPSApp(tk.Tk):
         self.marker_search_var: tk.StringVar | None = None
         self.marker_list: tk.Listbox | None = None
         self.marker_list_ids: list[str] = []
-        self.marker_timer_minutes_var: tk.IntVar | None = None
+        self.marker_timer_text_var: tk.StringVar | None = None
         default_sound = default_windows_sound_path()
         sound_settings = self.settings.get_timer_sound_settings(default_sound)
         self.timer_sound_enabled_var: tk.BooleanVar | None = None
@@ -268,9 +269,11 @@ class EQGPSApp(tk.Tk):
         timer_row = ttk.Frame(side)
         timer_row.pack(fill=tk.X, padx=6, pady=2)
         ttk.Label(timer_row, text="Timer").pack(side=tk.LEFT)
-        self.marker_timer_minutes_var = tk.IntVar(value=self.settings.get_marker_timer_minutes(DEFAULT_TIMER_MINUTES))
-        tk.Spinbox(timer_row, from_=1, to=999, increment=1, width=4, textvariable=self.marker_timer_minutes_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(timer_row, text="min").pack(side=tk.LEFT)
+        self.marker_timer_text_var = tk.StringVar(
+            value=format_timer_duration(self.settings.get_marker_timer_seconds(DEFAULT_TIMER_SECONDS))
+        )
+        ttk.Entry(timer_row, width=6, textvariable=self.marker_timer_text_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(timer_row, text="mm:ss").pack(side=tk.LEFT)
         marker_buttons = ttk.Frame(side)
         marker_buttons.pack(fill=tk.X, padx=6, pady=2)
         ttk.Button(marker_buttons, text="WP", command=self.set_selected_marker_waypoint).pack(side=tk.LEFT, expand=True, fill=tk.X)
@@ -1004,35 +1007,35 @@ class EQGPSApp(tk.Tk):
         if marker:
             self.edit_marker_details(marker)
 
-    def current_marker_timer_minutes(self) -> int:
-        if not self.marker_timer_minutes_var:
-            return DEFAULT_TIMER_MINUTES
+    def current_marker_timer_seconds(self) -> int:
+        if not self.marker_timer_text_var:
+            return DEFAULT_TIMER_SECONDS
         try:
-            minutes = normalize_timer_minutes(self.marker_timer_minutes_var.get())
+            seconds = normalize_timer_seconds(self.marker_timer_text_var.get())
         except tk.TclError:
-            minutes = DEFAULT_TIMER_MINUTES
-        self.marker_timer_minutes_var.set(minutes)
-        self.settings.set_marker_timer_minutes(minutes)
-        return minutes
+            seconds = DEFAULT_TIMER_SECONDS
+        self.marker_timer_text_var.set(format_timer_duration(seconds))
+        self.settings.set_marker_timer_seconds(seconds)
+        return seconds
 
     def start_selected_marker_timer(self) -> None:
         marker = self.marker_store.get(self.selected_marker_id() or "")
         if not marker:
             return
-        minutes = self.current_marker_timer_minutes()
-        reset_marker_timer(marker, minutes=minutes)
+        seconds = self.current_marker_timer_seconds()
+        reset_marker_timer(marker, seconds=seconds)
         self.save_markers()
-        self.update_status(f"{minutes}m timer started")
+        self.update_status(f"{format_timer_duration(seconds)} timer started")
         self.render()
 
     def reset_selected_marker_timer(self) -> None:
         marker = self.marker_store.get(self.selected_marker_id() or "")
         if not marker:
             return
-        minutes = self.current_marker_timer_minutes()
-        reset_marker_timer_paused(marker, minutes=minutes)
+        seconds = self.current_marker_timer_seconds()
+        reset_marker_timer_paused(marker, seconds=seconds)
         self.save_markers()
-        self.update_status(f"{minutes}m timer reset (paused)")
+        self.update_status(f"{format_timer_duration(seconds)} timer reset (paused)")
         self.render()
 
     def clear_selected_marker_timer(self) -> None:
@@ -1275,11 +1278,18 @@ class EQGPSApp(tk.Tk):
         if not label:
             return
         category = simpledialog.askstring("EQGPS Marker", "Category:", initialvalue="Custom", parent=self) or "Custom"
-        timer_text = simpledialog.askstring("EQGPS Marker", "Timer minutes (blank for none):", initialvalue=str(self.current_marker_timer_minutes()), parent=self)
+        timer_text = simpledialog.askstring(
+            "EQGPS Marker",
+            "Timer mm:ss (blank for none):",
+            initialvalue=format_timer_duration(self.current_marker_timer_seconds()),
+            parent=self,
+        )
+        timer_seconds = None
         timer_minutes = None
         timer_started_at = None
         if timer_text and timer_text.strip():
-            timer_minutes = normalize_timer_minutes(timer_text)
+            timer_seconds = normalize_timer_seconds(timer_text)
+            timer_minutes = max(1, math.ceil(timer_seconds / 60))
             timer_started_at = time.time()
         marker = Marker(
             zone_key=self.current_zone_key,
@@ -1288,6 +1298,7 @@ class EQGPSApp(tk.Tk):
             label=label.strip(),
             category=category.strip() or "Custom",
             timer_minutes=timer_minutes,
+            timer_seconds=timer_seconds,
             timer_started_at=timer_started_at,
         )
         self.marker_store.add(marker)
@@ -1316,33 +1327,31 @@ class EQGPSApp(tk.Tk):
         marker = self.marker_store.get(self.context_marker_id or "")
         if not marker:
             return
-        minutes = simpledialog.askinteger(
+        timer_text = simpledialog.askstring(
             "EQGPS Timer",
-            "Timer minutes:",
-            initialvalue=self.current_marker_timer_minutes(),
-            minvalue=1,
-            maxvalue=999,
+            "Timer mm:ss:",
+            initialvalue=format_timer_duration(self.current_marker_timer_seconds()),
             parent=self,
         )
-        if minutes is None:
+        if timer_text is None:
             return
-        minutes = normalize_timer_minutes(minutes)
-        if self.marker_timer_minutes_var:
-            self.marker_timer_minutes_var.set(minutes)
-        self.settings.set_marker_timer_minutes(minutes)
-        reset_marker_timer(marker, minutes=minutes)
+        seconds = normalize_timer_seconds(timer_text)
+        if self.marker_timer_text_var:
+            self.marker_timer_text_var.set(format_timer_duration(seconds))
+        self.settings.set_marker_timer_seconds(seconds)
+        reset_marker_timer(marker, seconds=seconds)
         self.save_markers()
-        self.update_status(f"{minutes}m timer started")
+        self.update_status(f"{format_timer_duration(seconds)} timer started")
         self.render()
 
     def reset_context_marker_timer(self) -> None:
         marker = self.marker_store.get(self.context_marker_id or "")
         if not marker:
             return
-        minutes = self.current_marker_timer_minutes()
-        reset_marker_timer_paused(marker, minutes=minutes)
+        seconds = self.current_marker_timer_seconds()
+        reset_marker_timer_paused(marker, seconds=seconds)
         self.save_markers()
-        self.update_status(f"{minutes}m timer reset (paused)")
+        self.update_status(f"{format_timer_duration(seconds)} timer reset (paused)")
         self.render()
 
     def clear_context_marker_timer(self) -> None:

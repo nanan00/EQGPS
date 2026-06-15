@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
 
 APP_NAME = "EQGPS"
-DEFAULT_LOG_PATH = Path(r"C:\Users\Public\EQ_P99\Logs\eqlog_Nanantwo_P1999Green 20260604day.txt")
-DEFAULT_MAP_DIR = Path(r"C:\Users\nanan\Development\EQGPS\map_files")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_LOG_PATH = Path(os.environ.get("PUBLIC", r"C:\Users\Public")) / "EQ_P99" / "Logs" / "eqlog_Yourcharacter_P1999Green.txt"
+DEFAULT_MAP_DIR = PROJECT_ROOT / "map_files"
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -129,6 +131,22 @@ class Settings:
 
     def set_marker_timer_minutes(self, minutes: int) -> None:
         self.data["marker_timer_minutes"] = max(1, int(minutes))
+        self.data["marker_timer_seconds"] = self.data["marker_timer_minutes"] * 60
+        self.save()
+
+    def get_marker_timer_seconds(self, default: int = 18 * 60) -> int:
+        if "marker_timer_seconds" not in self.data and "marker_timer_minutes" in self.data:
+            return self.get_marker_timer_minutes(math.ceil(default / 60)) * 60
+        try:
+            seconds = int(self.data.get("marker_timer_seconds", default))
+        except (TypeError, ValueError):
+            seconds = self.get_marker_timer_minutes(math.ceil(default / 60)) * 60
+        return max(1, seconds)
+
+    def set_marker_timer_seconds(self, seconds: int) -> None:
+        seconds = max(1, int(seconds))
+        self.data["marker_timer_seconds"] = seconds
+        self.data["marker_timer_minutes"] = max(1, int(math.ceil(seconds / 60)))
         self.save()
 
     def get_timer_sound_settings(self, default_path: str = "") -> dict[str, Any]:

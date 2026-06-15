@@ -93,6 +93,21 @@ class SettingsTests(unittest.TestCase):
 
             self.assertEqual(settings.get_zone_calibration("freportw"), {"offset_x": 0.0, "offset_y": 0.0})
 
+    def test_marker_timer_seconds_persists_and_migrates_legacy_minutes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = Settings(settings_path)
+
+            settings.set_marker_timer_seconds(90)
+            reloaded = Settings(settings_path)
+            self.assertEqual(reloaded.get_marker_timer_seconds(), 90)
+            self.assertEqual(reloaded.get_marker_timer_minutes(), 2)
+
+            legacy_path = Path(tmp) / "legacy_settings.json"
+            legacy_path.write_text('{"marker_timer_minutes": 14}', encoding="utf-8")
+            legacy = Settings(legacy_path)
+            self.assertEqual(legacy.get_marker_timer_seconds(), 14 * 60)
+
 
 if __name__ == "__main__":
     unittest.main()

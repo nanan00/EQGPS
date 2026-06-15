@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 import time
 import uuid
 from typing import Any
 
 DEFAULT_TIMER_MINUTES = 18
+DEFAULT_TIMER_SECONDS = DEFAULT_TIMER_MINUTES * 60
 MIN_TIMER_MINUTES = 1
 MAX_TIMER_MINUTES = 999
+MIN_TIMER_SECONDS = 1
+MAX_TIMER_SECONDS = MAX_TIMER_MINUTES * 60 + 59
 
 
 def _safe_optional_int(value: object) -> int | None:
@@ -41,18 +45,91 @@ def normalize_timer_minutes(value: object, default: int = DEFAULT_TIMER_MINUTES)
     return max(MIN_TIMER_MINUTES, min(MAX_TIMER_MINUTES, minutes))
 
 
-def reset_marker_timer(marker: "Marker", minutes: object | None = None, now: float | None = None) -> None:
-    marker.timer_minutes = normalize_timer_minutes(minutes, default=marker.timer_minutes or DEFAULT_TIMER_MINUTES)
+def _clamp_timer_seconds(seconds: int) -> int:
+    return max(MIN_TIMER_SECONDS, min(MAX_TIMER_SECONDS, seconds))
+
+
+def normalize_timer_seconds(value: object, default: int = DEFAULT_TIMER_SECONDS) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return _clamp_timer_seconds(int(round(value)))
+        text = str(value).strip()
+        if not text:
+            return default
+        if ":" in text:
+            parts = text.split(":")
+            if len(parts) != 2:
+                return default
+            minutes_text, seconds_text = parts
+            minutes_text = minutes_text.strip() or "0"
+            minutes = int(minutes_text)
+            seconds = int(seconds_text.strip())
+            if minutes < 0 or seconds < 0 or seconds > 59:
+                return default
+            total_seconds = minutes * 60 + seconds
+        else:
+            # Preserve the old minute-based UX for plain numeric input: "18" is
+            # still an 18-minute timer, while mm:ss unlocks second precision.
+            total_seconds = int(round(float(text) * 60))
+    except (TypeError, ValueError):
+        return default
+    return _clamp_timer_seconds(total_seconds)
+
+
+def format_timer_duration(seconds: object) -> str:
+    try:
+        duration = _clamp_timer_seconds(int(seconds))
+    except (TypeError, ValueError):
+        duration = DEFAULT_TIMER_SECONDS
+    minutes, remainder = divmod(duration, 60)
+    return f"{minutes:02d}:{remainder:02d}"
+
+
+def marker_timer_duration_seconds(marker: "Marker") -> int | None:
+    if marker.timer_seconds is not None:
+        return _clamp_timer_seconds(marker.timer_seconds)
+    if marker.timer_minutes is not None:
+        return normalize_timer_minutes(marker.timer_minutes) * 60
+    return None
+
+
+def _remember_timer_duration(marker: "Marker", seconds: int) -> None:
+    marker.timer_seconds = seconds
+    # Keep the legacy minute field populated for older settings/exports while
+    # using timer_seconds as the precise mm:ss source of truth.
+    marker.timer_minutes = max(MIN_TIMER_MINUTES, min(MAX_TIMER_MINUTES, int(math.ceil(seconds / 60))))
+
+
+def reset_marker_timer(
+    marker: "Marker",
+    minutes: object | None = None,
+    now: float | None = None,
+    seconds: object | None = None,
+) -> None:
+    default_seconds = marker_timer_duration_seconds(marker) or DEFAULT_TIMER_SECONDS
+    if seconds is not None:
+        duration_seconds = normalize_timer_seconds(seconds, default=default_seconds)
+    else:
+        duration_seconds = normalize_timer_minutes(minutes, default=math.ceil(default_seconds / 60)) * 60
+    _remember_timer_duration(marker, duration_seconds)
     marker.timer_started_at = time.time() if now is None else now
 
 
-def reset_marker_timer_paused(marker: "Marker", minutes: object | None = None) -> None:
-    marker.timer_minutes = normalize_timer_minutes(minutes, default=marker.timer_minutes or DEFAULT_TIMER_MINUTES)
+def reset_marker_timer_paused(marker: "Marker", minutes: object | None = None, seconds: object | None = None) -> None:
+    default_seconds = marker_timer_duration_seconds(marker) or DEFAULT_TIMER_SECONDS
+    if seconds is not None:
+        duration_seconds = normalize_timer_seconds(seconds, default=default_seconds)
+    else:
+        duration_seconds = normalize_timer_minutes(minutes, default=math.ceil(default_seconds / 60)) * 60
+    _remember_timer_duration(marker, duration_seconds)
     marker.timer_started_at = None
 
 
 def clear_marker_timer(marker: "Marker") -> None:
     marker.timer_minutes = None
+    marker.timer_seconds = None
     marker.timer_started_at = None
 
 
@@ -72,6 +149,7 @@ class Marker:
     notes: str = ""
     color: str = "#ffcc00"
     timer_minutes: int | None = None
+    timer_seconds: int | None = None
     timer_started_at: float | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
@@ -92,6 +170,7 @@ class Marker:
             notes=str(data.get("notes", "")),
             color=str(data.get("color", "#ffcc00")),
             timer_minutes=_safe_optional_int(data.get("timer_minutes")),
+            timer_seconds=_safe_optional_int(data.get("timer_seconds")),
             timer_started_at=_safe_optional_float(data.get("timer_started_at")),
         )
 
@@ -182,12 +261,13 @@ class MarkerStore:
 
 
 def marker_timer_state(marker: Marker, now: float | None = None) -> str | None:
-    if marker.timer_minutes is None or marker.timer_started_at is None:
+    duration_seconds = marker_timer_duration_seconds(marker)
+    if duration_seconds is None or marker.timer_started_at is None:
         return None
     now = time.time() if now is None else now
-    remaining = marker.timer_minutes * 60 - (now - marker.timer_started_at)
+    remaining = duration_seconds - (now - marker.timer_started_at)
     if remaining <= 0:
         return "READY"
     minutes = int(remaining // 60)
     seconds = int(remaining % 60)
-    return f"{minutes}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"

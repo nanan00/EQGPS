@@ -5,8 +5,11 @@ from eqgps.markers import (
     Marker,
     MarkerStore,
     clear_marker_timer,
+    format_timer_duration,
+    marker_timer_duration_seconds,
     marker_timer_state,
     normalize_timer_minutes,
+    normalize_timer_seconds,
     reset_marker_timer,
     reset_marker_timer_paused,
     update_marker_details,
@@ -53,7 +56,7 @@ class MarkerTests(unittest.TestCase):
 
         state = marker_timer_state(marker, now=100.0 + 2 * 60)
 
-        self.assertEqual(state, "4:00")
+        self.assertEqual(state, "04:00")
 
     def test_search_filters_by_zone_label_category_and_notes(self):
         store = MarkerStore([
@@ -93,6 +96,28 @@ class MarkerTests(unittest.TestCase):
         self.assertEqual(normalize_timer_minutes(""), 18)
         self.assertEqual(normalize_timer_minutes("not a number"), 18)
         self.assertEqual(normalize_timer_minutes("0"), 1)
+
+    def test_timer_duration_parses_and_formats_mmss(self):
+        self.assertEqual(normalize_timer_seconds("04:30"), 4 * 60 + 30)
+        self.assertEqual(normalize_timer_seconds("0:05"), 5)
+        self.assertEqual(normalize_timer_seconds("18"), 18 * 60)
+        self.assertEqual(normalize_timer_seconds("1:99"), 18 * 60)
+        self.assertEqual(format_timer_duration(4 * 60), "04:00")
+
+    def test_marker_timer_state_uses_precise_mmss_seconds(self):
+        marker = Marker(zone_key="ecommons", x=0, y=0, label="spawn", timer_seconds=90, timer_started_at=100.0)
+
+        self.assertEqual(marker_timer_duration_seconds(marker), 90)
+        self.assertEqual(marker_timer_state(marker, now=115.0), "01:15")
+
+    def test_reset_marker_timer_can_start_precise_mmss_seconds(self):
+        marker = Marker(zone_key="ecommons", x=0, y=0, label="spawn")
+
+        reset_marker_timer(marker, seconds=90, now=500.0)
+
+        self.assertEqual(marker.timer_seconds, 90)
+        self.assertEqual(marker.timer_minutes, 2)
+        self.assertEqual(marker_timer_state(marker, now=500.0), "01:30")
 
     def test_reset_marker_timer_restarts_existing_timer_and_can_update_minutes(self):
         marker = Marker(zone_key="ecommons", x=0, y=0, label="spawn", timer_minutes=18, timer_started_at=100.0)

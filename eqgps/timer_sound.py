@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .markers import Marker
+from .markers import Marker, marker_timer_duration_seconds
 
 
 DEFAULT_SOUND_NAMES = (
@@ -38,11 +38,12 @@ class TimerSoundNotifier:
         ready: list[str] = []
         active_ids: set[str] = set()
         for marker in markers:
-            if marker.timer_minutes is None or marker.timer_started_at is None:
+            duration_seconds = marker_timer_duration_seconds(marker)
+            if duration_seconds is None or marker.timer_started_at is None:
                 self._ready_tokens.pop(marker.id, None)
                 continue
             active_ids.add(marker.id)
-            ready_at = marker.timer_started_at + marker.timer_minutes * 60
+            ready_at = marker.timer_started_at + duration_seconds
             token = marker.timer_started_at
             if now < ready_at:
                 if self._ready_tokens.get(marker.id) != token:

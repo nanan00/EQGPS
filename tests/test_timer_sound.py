@@ -22,6 +22,13 @@ class TimerSoundTests(unittest.TestCase):
         self.assertEqual(notifier.ready_marker_ids([marker], now=230.0), [])
         self.assertEqual(notifier.ready_marker_ids([marker], now=261.0), ["spawn1"])
 
+    def test_notifier_uses_mmss_timer_seconds(self):
+        marker = Marker(zone_key="qeynos", x=0, y=0, label="spawn", id="short", timer_seconds=45, timer_started_at=0.0)
+        notifier = TimerSoundNotifier()
+
+        self.assertEqual(notifier.ready_marker_ids([marker], now=44.0), [])
+        self.assertEqual(notifier.ready_marker_ids([marker], now=45.0), ["short"])
+
     def test_notifier_ignores_markers_without_active_timer(self):
         marker = Marker(zone_key="qeynos", x=0, y=0, label="plain", id="plain")
         notifier = TimerSoundNotifier()
