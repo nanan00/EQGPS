@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 ZONE_RE = re.compile(r"You have entered\s+(.+?)\.?\s*$", re.IGNORECASE)
+NON_ZONE_ENTER_NAMES = {"an arena (pvp) area"}
 LOC_RE = re.compile(
     r"Your Location is\s+"
     r"(-?\d+(?:\.\d+)?),\s*"
@@ -32,7 +33,10 @@ def parse_zone_line(line: str) -> str | None:
     match = ZONE_RE.search(line.strip())
     if not match:
         return None
-    return match.group(1).strip().rstrip(".").strip().strip('"\'')
+    zone_name = match.group(1).strip().rstrip(".").strip().strip('"\'')
+    if zone_name.lower() in NON_ZONE_ENTER_NAMES:
+        return None
+    return zone_name
 
 
 def parse_loc_line(line: str) -> Loc | None:

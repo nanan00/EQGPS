@@ -17,6 +17,10 @@ class Phase1Tests(unittest.TestCase):
         line = '[Fri Jun 05 00:00:00 2026] You have entered "West Freeport".'
         self.assertEqual(parse_zone_line(line), "West Freeport")
 
+    def test_parse_zone_line_ignores_pvp_area_notification(self):
+        line = "[Wed Jun 10 22:29:51 2026] You have entered an Arena (PvP) area."
+        self.assertIsNone(parse_zone_line(line))
+
     def test_parse_loc_line_extracts_three_float_values(self):
         line = "[Mon Apr 27 21:30:42 2026] Your Location is 444.48, 134.01, -124.57"
         loc = parse_loc_line(line)
