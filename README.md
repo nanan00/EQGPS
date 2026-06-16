@@ -32,8 +32,8 @@ EQGPS does **not** automate gameplay, inject into the client, or send keypresses
 - Draws waypoint ring/line from player and shows waypoint distance in the bottom bar.
 - Timer notifications can play a selected `.wav` file.
 - Provides per-zone map calibration: Ctrl+Arrow nudges 10 units, Ctrl+Shift+Arrow nudges 100 units, and Reset Cal clears the zone offset.
-- Adds a right-sidebar peekaboo arrow (`>`/`<`) that hides or reopens the side panel.
-- Adds persistent Always on Top, Mini Mode, Transparent UI, and Borderless Overlay modes.
+- Right-sidebar peekaboo arrow (`>`/`<`) that hides or reopens the side panel.
+- Persistent Always on Top, Mini Mode, Transparent UI, and Borderless Overlay modes.
 - Borderless Overlay mode includes Restore Normal, opacity, click-through, lock-window, Always on Top, and Mini Mode controls.
 - Keyboard shortcuts: `F` fit map, `C` center player, `W` clear waypoint, and `T` toggle the side tray.
 - Remembers window size/position on close.
