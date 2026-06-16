@@ -76,7 +76,7 @@ No third-party Python packages are required for normal use.
 
 5. In game, use `/loc`, zone, or run `/who` so EQGPS can update your zone and location.
 
-The bundled maps live in `map_files/`. By default EQGPS looks for this folder next to the application files, so a normal clone/download should work without editing paths.
+The bundled maps are stored in `map_files/map_files.zip`. On first launch, EQGPS automatically extracts that archive into `map_files/` when the loose map `.txt` files are not present, so a normal GitHub source download should work without editing paths.
 
 ## Runtime data
 
@@ -90,7 +90,7 @@ Runtime data is intentionally not stored in the repository.
 
 ## Running tests
 
-The test suite uses the Python standard library `unittest` runner:
+Tests are development-only. They are kept in the Git repository for contributors, but omitted from GitHub-generated source downloads. If you clone the repository for development, run the standard-library `unittest` suite with:
 
 ```bash
 python -m unittest discover -s tests -q

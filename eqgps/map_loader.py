@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shutil
+import zipfile
 
 from .coordinates import raw_map_file_xy_to_map_point
+
+MAP_ARCHIVE_NAME = "map_files.zip"
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,50 @@ def visible_color(r: int, g: int, b: int) -> tuple[int, int, int]:
     if r < 32 and g < 32 and b < 32:
         return (220, 220, 220)
     return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+
+
+def _map_assets_present(map_dir: Path) -> bool:
+    return (map_dir / "map_keys.ini").exists() and any(map_dir.glob("*.txt"))
+
+
+def _safe_archive_target(map_dir: Path, member_name: str) -> Path | None:
+    member_path = PurePosixPath(member_name)
+    if member_path.is_absolute() or any(part in {"", ".", ".."} for part in member_path.parts):
+        return None
+    target = map_dir.joinpath(*member_path.parts)
+    try:
+        target.resolve().relative_to(map_dir.resolve())
+    except ValueError:
+        return None
+    return target
+
+
+def ensure_map_files_available(map_dir: str | Path) -> bool:
+    """Extract bundled map_files.zip when loose map assets are absent.
+
+    Returns True when extraction happened. Returns False when maps were already
+    present or no bundled archive exists.
+    """
+    map_dir = Path(map_dir)
+    if _map_assets_present(map_dir):
+        return False
+
+    archive_path = map_dir / MAP_ARCHIVE_NAME
+    if not archive_path.exists():
+        return False
+
+    map_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            target = _safe_archive_target(map_dir, member.filename)
+            if target is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+    return True
 
 
 def _split_csv(line: str) -> list[str]:

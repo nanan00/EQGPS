@@ -1,0 +1,8 @@
+# Keep development-only tests out of GitHub-generated source downloads.
+tests export-ignore
+tests/** export-ignore
+
+# GitHub source downloads should ship maps as the bundled archive only.
+map_files/*.txt export-ignore
+map_files/*.ini export-ignore
+map_files/*.zip binary

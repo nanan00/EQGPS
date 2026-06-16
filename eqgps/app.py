@@ -17,7 +17,7 @@ from .log_polling import read_then_prune_safely
 from .log_prune import maybe_prune_log
 from .log_watcher import LogTailer
 from .map_keys import MapKeys
-from .map_loader import MapLayer, ParsedMap, discover_zone_layers, parse_map_file
+from .map_loader import MapLayer, ParsedMap, discover_zone_layers, ensure_map_files_available, parse_map_file
 from .markers import (
     DEFAULT_TIMER_SECONDS,
     Marker,
@@ -86,6 +86,7 @@ class EQGPSApp(tk.Tk):
 
         self.settings = Settings()
         self.map_dir = self.settings.map_dir
+        ensure_map_files_available(self.map_dir)
         self.map_keys = MapKeys.load(self.map_dir / "map_keys.ini", self.map_dir / "map_keys_who.ini")
         self.current_zone_name: str | None = None
         self.current_zone_key: str | None = None
@@ -811,6 +812,7 @@ class EQGPSApp(tk.Tk):
         return not self._batching_log_scan
 
     def reload_map_keys(self) -> None:
+        ensure_map_files_available(self.map_dir)
         self.map_keys = MapKeys.load(self.map_dir / "map_keys.ini", self.map_dir / "map_keys_who.ini")
         if self.current_zone_name:
             self.handle_zone(self.current_zone_name)
