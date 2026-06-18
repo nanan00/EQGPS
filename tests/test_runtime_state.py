@@ -24,6 +24,17 @@ class RuntimeStateTests(unittest.TestCase):
 
         self.assertEqual(state.current_loc, loc)
 
+    def test_reset_clears_all_fields(self):
+        state = RuntimeState()
+        state.update_zone("North Freeport", "freportn")
+        state.update_loc(Loc(1.0, 2.0, 3.0))
+
+        state.reset()
+
+        self.assertIsNone(state.current_zone_name)
+        self.assertIsNone(state.current_zone_key)
+        self.assertIsNone(state.current_loc)
+
 
 if __name__ == "__main__":
     unittest.main()

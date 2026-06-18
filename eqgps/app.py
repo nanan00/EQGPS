@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import json
 import math
 from pathlib import Path
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
+from . import __version__
 from .calibration import ZoneCalibration, apply_calibration_to_bounds
 from .coordinates import MapPoint, loc_to_map_point, map_point_to_loc_xy
 from .elevation import ElevationFilter, label_visible_at_player_z, line_visible_at_player_z
@@ -25,6 +27,7 @@ from .markers import (
     clear_marker_timer,
     format_timer_duration,
     marker_timer_state,
+    normalize_marker_color,
     normalize_timer_seconds,
     reset_marker_timer,
     reset_marker_timer_paused,
@@ -49,7 +52,13 @@ from .ui_layout import (
     side_tray_toolbar_buttons,
     window_alpha_for_chrome_opacity,
 )
-from .viewport import ViewportTransform, clamp_pan_units, fit_viewport_to_bounds
+from .viewport import (
+    ViewportTransform,
+    clamp_pan_units,
+    fit_viewport_to_bounds,
+    point_on_screen,
+    segment_on_screen,
+)
 
 
 BG = "#101010"
@@ -69,6 +78,14 @@ def blend_with_bg(color: tuple[int, int, int], opacity: int) -> tuple[int, int, 
     return tuple(int(channel * alpha + bg_channel * (1.0 - alpha)) for channel, bg_channel in zip(color, bg))
 
 
+@lru_cache(maxsize=4096)
+def blended_hex(color: tuple[int, int, int], opacity: int) -> str:
+    """Cached map-color blend. Map geometry reuses a small palette across many
+    thousands of segments, so memoizing the blend+hex avoids recomputing the
+    same string every frame (and on every pan/zoom)."""
+    return rgb_to_hex(blend_with_bg(color, opacity))
+
+
 @dataclass
 class LayerState:
     layer: MapLayer
@@ -80,17 +97,17 @@ class LayerState:
 class EQGPSApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("EQGPS - Phase 18")
-        self.geometry(self._initial_geometry())
+        self.settings = Settings()
+        self.title(f"EQGPS {__version__}")
+        self.geometry(self.settings.window_geometry or "1200x820")
         self.minsize(800, 500)
 
-        self.settings = Settings()
         self.map_dir = self.settings.map_dir
         ensure_map_files_available(self.map_dir)
         self.map_keys = MapKeys.load(self.map_dir / "map_keys.ini", self.map_dir / "map_keys_who.ini")
-        self.current_zone_name: str | None = None
-        self.current_zone_key: str | None = None
-        self.current_loc: Loc | None = None
+        # RuntimeState is the single source of truth for zone/loc; the
+        # current_zone_name/current_zone_key/current_loc properties below read
+        # and write through it so there is no shadow copy to keep in sync.
         self.state = RuntimeState()
         self.cursor_world: tuple[float, float] | None = None
         self.layer_states: list[LayerState] = []
@@ -124,6 +141,8 @@ class EQGPSApp(tk.Tk):
         self.overlay_grip: tk.Frame | None = None
         self.overlay_drag_start: tuple[int, int, int, int] | None = None
         self._batching_log_scan = False
+        self._settings_flush_job: str | None = None
+        self._status_refresh_job: str | None = None
         self.initial_timer_sound_enabled = bool(sound_settings.get("enabled", True))
         self.initial_timer_sound_path = str(sound_settings.get("path") or default_sound)
         self.timer_sound_notifier = TimerSoundNotifier()
@@ -147,9 +166,50 @@ class EQGPSApp(tk.Tk):
         self.open_log_path(self.settings.log_path, scan=True, silent=True)
         self.after(750, self.poll_log)
 
-    def _initial_geometry(self) -> str:
-        settings = Settings()
-        return settings.window_geometry or "1200x820"
+    # --- Zone/location state (backed by self.state) -----------------------
+    @property
+    def current_zone_name(self) -> str | None:
+        return self.state.current_zone_name
+
+    @current_zone_name.setter
+    def current_zone_name(self, value: str | None) -> None:
+        self.state.current_zone_name = value
+
+    @property
+    def current_zone_key(self) -> str | None:
+        return self.state.current_zone_key
+
+    @current_zone_key.setter
+    def current_zone_key(self, value: str | None) -> None:
+        self.state.current_zone_key = value
+
+    @property
+    def current_loc(self) -> Loc | None:
+        return self.state.current_loc
+
+    @current_loc.setter
+    def current_loc(self, value: Loc | None) -> None:
+        self.state.current_loc = value
+
+    # --- Debounced settings persistence -----------------------------------
+    def schedule_deferred_settings_save(self, delay_ms: int = 400) -> None:
+        """Coalesce a burst of slider writes into one disk write.
+
+        Slider ``command`` callbacks fire many times per second while dragging.
+        We suspend immediate writes and flush once movement settles, so a single
+        drag costs one atomic settings write instead of dozens.
+        """
+        self.settings.begin_deferred_save()
+        if self._settings_flush_job is not None:
+            try:
+                self.after_cancel(self._settings_flush_job)
+            except (tk.TclError, ValueError):
+                pass
+        self._settings_flush_job = self.after(delay_ms, self._flush_settings)
+
+    def _flush_settings(self) -> None:
+        self._settings_flush_job = None
+        self.settings.flush()
 
     def _build_ui(self) -> None:
         self.configure(bg=BG)
@@ -648,6 +708,7 @@ class EQGPSApp(tk.Tk):
 
     def on_ui_chrome_opacity_changed(self, _value: str | None = None) -> None:
         opacity = self.current_ui_chrome_opacity()
+        self.schedule_deferred_settings_save()
         self.settings.ui_chrome_opacity = opacity
         self.apply_transparency_mode()
         self.update_status(chrome_opacity_status_text(opacity))
@@ -777,9 +838,7 @@ class EQGPSApp(tk.Tk):
         pruned_archive_name: str | None = None
         log_open_status: str | None = None
         if scan:
-            self.current_zone_name = None
-            self.current_zone_key = None
-            self.current_loc = None
+            self.state.reset()
             self.cursor_world = None
             self.layer_states = []
             self.raw_map_bounds = None
@@ -846,9 +905,6 @@ class EQGPSApp(tk.Tk):
         zone_key = self.map_keys.resolve(zone_name)
         previous_loc = self.current_loc
         self.state.update_zone(zone_name, zone_key)
-        self.current_zone_name = self.state.current_zone_name
-        self.current_zone_key = self.state.current_zone_key
-        self.current_loc = self.state.current_loc
         if previous_loc is not None and self.current_loc is None:
             self.heading = HeadingTracker(min_distance=3.0)
         self.layer_states = []
@@ -876,7 +932,6 @@ class EQGPSApp(tk.Tk):
 
     def handle_loc(self, loc: Loc) -> None:
         self.state.update_loc(loc)
-        self.current_loc = self.state.current_loc
         self.heading.add_sample(loc)
         self.update_status("Location updated")
         if self.should_render_immediately():
@@ -998,7 +1053,16 @@ class EQGPSApp(tk.Tk):
         notes = simpledialog.askstring("EQGPS Marker", "Notes:", initialvalue=marker.notes, parent=self)
         if notes is None:
             return False
-        update_marker_details(marker, label=label, category=category, notes=notes)
+        # Offer a color picker, pre-seeded with the marker's current color.
+        # Cancelling keeps the existing color rather than blanking it.
+        color = marker.color
+        try:
+            chosen = colorchooser.askcolor(color=marker.color, title="Marker color", parent=self)
+        except tk.TclError:
+            chosen = (None, None)
+        if chosen and chosen[1]:
+            color = normalize_marker_color(chosen[1], default=marker.color)
+        update_marker_details(marker, label=label, category=category, notes=notes, color=color)
         self.save_markers()
         self.update_status("Marker updated")
         self.render()
@@ -1009,7 +1073,13 @@ class EQGPSApp(tk.Tk):
         if marker:
             self.edit_marker_details(marker)
 
-    def current_marker_timer_seconds(self) -> int:
+    def current_marker_timer_seconds(self, persist: bool = False) -> int:
+        """Read the timer field, normalizing it back into the entry.
+
+        By default this is side-effect-free except for tidying the displayed
+        text. Pass persist=True only when the user is committing a timer (e.g.
+        starting one) so a mere read doesn't write settings to disk.
+        """
         if not self.marker_timer_text_var:
             return DEFAULT_TIMER_SECONDS
         try:
@@ -1017,14 +1087,15 @@ class EQGPSApp(tk.Tk):
         except tk.TclError:
             seconds = DEFAULT_TIMER_SECONDS
         self.marker_timer_text_var.set(format_timer_duration(seconds))
-        self.settings.set_marker_timer_seconds(seconds)
+        if persist:
+            self.settings.set_marker_timer_seconds(seconds)
         return seconds
 
     def start_selected_marker_timer(self) -> None:
         marker = self.marker_store.get(self.selected_marker_id() or "")
         if not marker:
             return
-        seconds = self.current_marker_timer_seconds()
+        seconds = self.current_marker_timer_seconds(persist=True)
         reset_marker_timer(marker, seconds=seconds)
         self.save_markers()
         self.update_status(f"{format_timer_duration(seconds)} timer started")
@@ -1034,7 +1105,7 @@ class EQGPSApp(tk.Tk):
         marker = self.marker_store.get(self.selected_marker_id() or "")
         if not marker:
             return
-        seconds = self.current_marker_timer_seconds()
+        seconds = self.current_marker_timer_seconds(persist=True)
         reset_marker_timer_paused(marker, seconds=seconds)
         self.save_markers()
         self.update_status(f"{format_timer_duration(seconds)} timer reset (paused)")
@@ -1112,7 +1183,7 @@ class EQGPSApp(tk.Tk):
         try:
             import winsound
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-        except Exception:
+        except (ImportError, RuntimeError, OSError):
             try:
                 self.bell()
             except tk.TclError:
@@ -1133,6 +1204,7 @@ class EQGPSApp(tk.Tk):
 
     def on_layer_changed(self, state: LayerState) -> None:
         if self.current_zone_key:
+            self.schedule_deferred_settings_save()
             self.settings.set_layer_settings(
                 self.current_zone_key,
                 state.layer.name,
@@ -1234,10 +1306,25 @@ class EQGPSApp(tk.Tk):
 
     def on_mouse_move(self, event: tk.Event) -> None:
         self.cursor_world = self.screen_to_world(event.x, event.y)
-        self.update_status("Watching log")
+        self.schedule_status_refresh()
 
     def on_mouse_leave(self, _event: tk.Event) -> None:
         self.cursor_world = None
+        self.update_status("Watching log")
+
+    def schedule_status_refresh(self, delay_ms: int = 60) -> None:
+        """Coalesce status-bar reformatting during rapid mouse motion.
+
+        Rebuilding the StatusSnapshot and bottom-bar string on every <Motion>
+        pixel is wasteful; a short trailing-edge timer keeps the readout
+        responsive without reformatting dozens of times per second.
+        """
+        if self._status_refresh_job is not None:
+            return
+        self._status_refresh_job = self.after(delay_ms, self._run_status_refresh)
+
+    def _run_status_refresh(self) -> None:
+        self._status_refresh_job = None
         self.update_status("Watching log")
 
     def on_context_menu(self, event: tk.Event) -> None:
@@ -1350,7 +1437,7 @@ class EQGPSApp(tk.Tk):
         marker = self.marker_store.get(self.context_marker_id or "")
         if not marker:
             return
-        seconds = self.current_marker_timer_seconds()
+        seconds = self.current_marker_timer_seconds(persist=True)
         reset_marker_timer_paused(marker, seconds=seconds)
         self.save_markers()
         self.update_status(f"{format_timer_duration(seconds)} timer reset (paused)")
@@ -1418,6 +1505,20 @@ class EQGPSApp(tk.Tk):
         map_dy = self.current_calibration.offset_y
         elevation = self.current_elevation_filter()
         player_z = self.current_loc.z if self.current_loc else None
+        # Build the viewport transform once per frame instead of allocating a
+        # fresh ViewportTransform for every endpoint, and skip geometry whose
+        # screen bbox falls outside the canvas. Both matter on every pan/zoom
+        # in large multi-layer zones with thousands of segments.
+        viewport = self.viewport()
+        if viewport is None:
+            self.render_markers()
+            self.render_player_marker()
+            return
+        to_screen = viewport.world_to_screen
+        canvas_w = max(1, self.canvas.winfo_width())
+        canvas_h = max(1, self.canvas.winfo_height())
+        create_line = self.canvas.create_line
+        create_text = self.canvas.create_text
         for state in self.layer_states:
             if not state.visible_var.get():
                 continue
@@ -1425,17 +1526,22 @@ class EQGPSApp(tk.Tk):
             for line in state.parsed.lines:
                 if not line_visible_at_player_z(line, player_z, elevation):
                     continue
-                x1, y1 = self.world_to_screen(line.x1 + map_dx, line.y1 + map_dy)
-                x2, y2 = self.world_to_screen(line.x2 + map_dx, line.y2 + map_dy)
-                self.canvas.create_line(x1, y1, x2, y2, fill=rgb_to_hex(blend_with_bg(line.color, opacity)), width=1)
+                x1, y1 = to_screen(line.x1 + map_dx, line.y1 + map_dy)
+                x2, y2 = to_screen(line.x2 + map_dx, line.y2 + map_dy)
+                if not segment_on_screen(x1, y1, x2, y2, canvas_w, canvas_h):
+                    continue
+                create_line(x1, y1, x2, y2, fill=blended_hex(line.color, opacity), width=1)
             for label in state.parsed.labels:
                 if not label_visible_at_player_z(label, player_z, elevation):
                     continue
-                x, y = self.world_to_screen(label.x + map_dx, label.y + map_dy)
-                self.canvas.create_text(x, y, text=label.text, fill=rgb_to_hex(blend_with_bg(label.color, opacity)), anchor=tk.CENTER, font=("Segoe UI", 8))
+                x, y = to_screen(label.x + map_dx, label.y + map_dy)
+                if not point_on_screen(x, y, canvas_w, canvas_h):
+                    continue
+                create_text(x, y, text=label.text, fill=blended_hex(label.color, opacity), anchor=tk.CENTER, font=("Segoe UI", 8))
 
         self.render_markers()
         self.render_player_marker()
+        self.render_overlay()
 
     def render_markers(self) -> None:
         for marker in self.marker_store.for_zone(self.current_zone_key):
@@ -1482,11 +1588,16 @@ class EQGPSApp(tk.Tk):
         self.canvas.create_text(x + 12, y - 12, text="You", fill=PLAYER_COLOR, anchor=tk.SW, font=("Segoe UI", 9, "bold"))
 
     def render_overlay(self) -> None:
+        # Only draw the on-canvas readout when the bottom status bar is hidden
+        # (mini mode / borderless overlay). In normal mode the bottom bar
+        # already shows this, so drawing it here would be redundant clutter.
+        if hasattr(self, "bottom_label") and self.bottom_label.winfo_ismapped():
+            return
         lines = []
         if self.current_loc:
             lines.append(f"Player: {self.current_loc.x:.1f}, {self.current_loc.y:.1f}, {self.current_loc.z:.1f}")
             if self.heading.heading_degrees is not None:
-                lines.append(f"Heading: {self.heading.heading_degrees:.1f}°")
+                lines.append(f"Heading: {self.heading.heading_degrees:.1f}\u00b0")
         if self.cursor_world:
             cursor_loc_x, cursor_loc_y = map_point_to_loc_xy(self.cursor_world)
             lines.append(f"Cursor: {cursor_loc_x:.1f}, {cursor_loc_y:.1f}")
@@ -1494,10 +1605,16 @@ class EQGPSApp(tk.Tk):
                 player = loc_to_map_point(self.current_loc)
                 distance = math.hypot(self.cursor_world[0] - player.x, self.cursor_world[1] - player.y)
                 lines.append(f"Dist: {distance:.1f}")
+        waypoint = self.marker_store.active_waypoint()
+        if waypoint and waypoint.zone_key == self.current_zone_key and self.current_loc:
+            player = loc_to_map_point(self.current_loc)
+            wp_distance = math.hypot(waypoint.x - player.x, waypoint.y - player.y)
+            lines.append(f"WP {waypoint.label}: {wp_distance:.1f}")
         if not lines:
             return
+        width = 18 + max(len(line) for line in lines) * 7
         text = "\n".join(lines)
-        self.canvas.create_rectangle(10, 10, 260, 28 + len(lines) * 18, fill="#000000", outline="#333333")
+        self.canvas.create_rectangle(10, 10, max(260, width), 28 + len(lines) * 18, fill="#000000", outline="#333333")
         self.canvas.create_text(18, 18, text=text, fill=FG, anchor=tk.NW, font=("Consolas", 10))
 
     def update_status(self, prefix: str) -> None:
@@ -1520,6 +1637,17 @@ class EQGPSApp(tk.Tk):
         self.bottom_var.set(format_bottom_status(snapshot))
 
     def on_close(self) -> None:
+        # Cancel pending timers and make sure any deferred slider change is
+        # written before we exit, so the user never loses a last-second tweak.
+        for job_attr in ("_settings_flush_job", "_status_refresh_job"):
+            job = getattr(self, job_attr, None)
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except (tk.TclError, ValueError):
+                    pass
+                setattr(self, job_attr, None)
+        self.settings.flush()
         self.set_window_click_through(False)
         self.settings.remember_window_geometry(self.geometry())
         if self.overlay_tray and self.overlay_tray.winfo_exists():

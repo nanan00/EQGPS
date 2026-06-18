@@ -28,6 +28,48 @@ class ViewportTransform:
         return math.hypot(b[0] - a[0], b[1] - a[1])
 
 
+def segment_on_screen(
+    sx1: float,
+    sy1: float,
+    sx2: float,
+    sy2: float,
+    canvas_width: int,
+    canvas_height: int,
+    margin: float = 32.0,
+) -> bool:
+    """Return True when a screen-space segment may be visible on the canvas.
+
+    Uses a cheap axis-aligned bounding-box overlap test against the canvas
+    rectangle (grown by ``margin`` so labels/line caps near the edge still
+    draw). Rejecting fully off-screen geometry avoids thousands of wasted
+    Tk canvas item creations per frame in large multi-layer zones.
+    """
+    left = min(sx1, sx2)
+    right = max(sx1, sx2)
+    top = min(sy1, sy2)
+    bottom = max(sy1, sy2)
+    if right < -margin or left > canvas_width + margin:
+        return False
+    if bottom < -margin or top > canvas_height + margin:
+        return False
+    return True
+
+
+def point_on_screen(
+    sx: float,
+    sy: float,
+    canvas_width: int,
+    canvas_height: int,
+    margin: float = 64.0,
+) -> bool:
+    """Return True when a screen-space point (e.g. a label) is near the canvas."""
+    if sx < -margin or sx > canvas_width + margin:
+        return False
+    if sy < -margin or sy > canvas_height + margin:
+        return False
+    return True
+
+
 def fit_viewport_to_bounds(
     bounds: tuple[float, float, float, float],
     canvas_width: int,

@@ -133,10 +133,31 @@ def clear_marker_timer(marker: "Marker") -> None:
     marker.timer_started_at = None
 
 
-def update_marker_details(marker: "Marker", label: str, category: str, notes: str) -> None:
+def _is_valid_hex_color(value: str) -> bool:
+    text = value.strip()
+    if not text.startswith("#") or len(text) not in (4, 7):
+        return False
+    return all(ch in "0123456789abcdefABCDEF" for ch in text[1:])
+
+
+def normalize_marker_color(value: object, default: str = "#ffcc00") -> str:
+    if isinstance(value, str) and _is_valid_hex_color(value):
+        return value.strip()
+    return default
+
+
+def update_marker_details(
+    marker: "Marker",
+    label: str,
+    category: str,
+    notes: str,
+    color: str | None = None,
+) -> None:
     marker.label = label.strip() or marker.label
     marker.category = category.strip() or "Custom"
     marker.notes = notes.strip()
+    if color is not None:
+        marker.color = normalize_marker_color(color, default=marker.color)
 
 
 @dataclass
@@ -168,7 +189,7 @@ class Marker:
             label=str(data.get("label", "Marker")),
             category=str(data.get("category", "Custom")),
             notes=str(data.get("notes", "")),
-            color=str(data.get("color", "#ffcc00")),
+            color=normalize_marker_color(data.get("color", "#ffcc00")),
             timer_minutes=_safe_optional_int(data.get("timer_minutes")),
             timer_seconds=_safe_optional_int(data.get("timer_seconds")),
             timer_started_at=_safe_optional_float(data.get("timer_started_at")),

@@ -30,18 +30,59 @@ class Settings:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else user_config_dir() / "settings.json"
         self.data: dict[str, Any] = {}
+        self._defer_save = False
+        self._dirty = False
         self.load()
 
     def load(self) -> None:
         if self.path.exists():
             try:
                 self.data = json.loads(self.path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, OSError):
+                # Don't silently wipe a corrupt settings file: preserve it as a
+                # .corrupt backup so the user (or a future migration) can try to
+                # recover markers/calibration instead of losing them outright.
+                self._backup_corrupt_settings()
                 self.data = {}
 
+    def _backup_corrupt_settings(self) -> None:
+        try:
+            backup = self.path.with_name(self.path.name + ".corrupt")
+            os.replace(self.path, backup)
+        except OSError:
+            pass
+
     def save(self) -> None:
+        # When deferral is active (e.g. during a slider drag) record the change
+        # in memory and let the caller flush() once the burst settles, instead
+        # of rewriting the whole file dozens of times per second.
+        if self._defer_save:
+            self._dirty = True
+            return
+        self._write()
+
+    def _write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+        # Write to a temp file in the same directory, then atomically replace
+        # the real settings file. A crash mid-write can only ever leave the
+        # previous good file or the temp file behind, never a half-written
+        # settings.json that load() would silently discard (losing markers,
+        # calibration, and window state).
+        payload = json.dumps(self.data, indent=2)
+        tmp_path = self.path.with_name(self.path.name + ".tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(tmp_path, self.path)
+        self._dirty = False
+
+    def begin_deferred_save(self) -> None:
+        """Suspend immediate disk writes; pair every call with flush()."""
+        self._defer_save = True
+
+    def flush(self) -> None:
+        """Persist any change that was staged while deferral was active."""
+        self._defer_save = False
+        if self._dirty:
+            self._write()
 
     @property
     def log_path(self) -> Path:

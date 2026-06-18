@@ -19,3 +19,8 @@ class RuntimeState:
 
     def update_loc(self, loc: Loc) -> None:
         self.current_loc = loc
+
+    def reset(self) -> None:
+        self.current_zone_name = None
+        self.current_zone_key = None
+        self.current_loc = None
