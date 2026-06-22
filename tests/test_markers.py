@@ -8,6 +8,7 @@ from eqgps.markers import (
     format_timer_duration,
     marker_timer_duration_seconds,
     marker_timer_state,
+    move_marker,
     normalize_timer_minutes,
     normalize_timer_seconds,
     reset_marker_timer,
@@ -167,6 +168,30 @@ class MarkerTests(unittest.TestCase):
         self.assertEqual(marker.category, "Camp")
         self.assertEqual(marker.notes, "respawns 14-28")
         self.assertEqual(marker.timer_minutes, 18)
+        self.assertEqual(marker.timer_started_at, 100.0)
+
+    def test_move_marker_updates_position_without_losing_marker_metadata(self):
+        marker = Marker(
+            zone_key="ecommons",
+            x=1,
+            y=2,
+            label="Named PH",
+            category="Spawn",
+            notes="respawns 14-28",
+            timer_seconds=90,
+            timer_started_at=100.0,
+            id="stable-id",
+        )
+
+        move_marker(marker, "123.5", -456)
+
+        self.assertEqual(marker.x, 123.5)
+        self.assertEqual(marker.y, -456.0)
+        self.assertEqual(marker.id, "stable-id")
+        self.assertEqual(marker.label, "Named PH")
+        self.assertEqual(marker.category, "Spawn")
+        self.assertEqual(marker.notes, "respawns 14-28")
+        self.assertEqual(marker.timer_seconds, 90)
         self.assertEqual(marker.timer_started_at, 100.0)
 
     def test_corrupt_imported_marker_records_are_skipped_without_losing_valid_markers(self):

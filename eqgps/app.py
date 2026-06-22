@@ -27,6 +27,7 @@ from .markers import (
     clear_marker_timer,
     format_timer_duration,
     marker_timer_state,
+    move_marker,
     normalize_marker_color,
     normalize_timer_seconds,
     reset_marker_timer,
@@ -339,6 +340,7 @@ class EQGPSApp(tk.Tk):
         marker_buttons.pack(fill=tk.X, padx=6, pady=2)
         ttk.Button(marker_buttons, text="WP", command=self.set_selected_marker_waypoint).pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(marker_buttons, text="Edit", command=self.edit_selected_marker).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        ttk.Button(marker_buttons, text="Move", command=self.adjust_selected_marker_location).pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(marker_buttons, text="Start", command=self.start_selected_marker_timer).pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(marker_buttons, text="Del", command=self.delete_selected_marker).pack(side=tk.LEFT, expand=True, fill=tk.X)
         timer_buttons = ttk.Frame(side)
@@ -1073,6 +1075,52 @@ class EQGPSApp(tk.Tk):
         if marker:
             self.edit_marker_details(marker)
 
+    def prompt_marker_location(self, marker: Marker) -> tuple[float, float] | None:
+        value = simpledialog.askstring(
+            "EQGPS Marker Location",
+            "Marker map X,Y:",
+            initialvalue=f"{marker.x:.1f}, {marker.y:.1f}",
+            parent=self,
+        )
+        if value is None:
+            return None
+        try:
+            parts = [part for part in value.replace(",", " ").split() if part]
+            if len(parts) != 2:
+                raise ValueError("enter two numbers")
+            return float(parts[0]), float(parts[1])
+        except ValueError as exc:
+            messagebox.showwarning("EQGPS", f"Could not move marker: {exc}")
+            return None
+
+    def move_marker_to_world(self, marker: Marker, world: tuple[float, float], status: str = "Marker moved") -> None:
+        move_marker(marker, world[0], world[1])
+        self.cursor_world = (marker.x, marker.y)
+        self.save_markers()
+        self.update_status(status)
+        self.render()
+
+    def adjust_marker_location(self, marker: Marker) -> None:
+        location = self.prompt_marker_location(marker)
+        if location is None:
+            return
+        self.move_marker_to_world(marker, location)
+
+    def adjust_selected_marker_location(self) -> None:
+        marker = self.marker_store.get(self.selected_marker_id() or "")
+        if marker:
+            self.adjust_marker_location(marker)
+
+    def adjust_context_marker_location(self) -> None:
+        marker = self.marker_store.get(self.context_marker_id or "")
+        if marker:
+            self.adjust_marker_location(marker)
+
+    def move_selected_marker_here(self) -> None:
+        marker = self.marker_store.get(self.selected_marker_id() or "")
+        if marker and self.context_world:
+            self.move_marker_to_world(marker, self.context_world, status="Marker moved to cursor")
+
     def current_marker_timer_seconds(self, persist: bool = False) -> int:
         """Read the timer field, normalizing it back into the entry.
 
@@ -1330,12 +1378,16 @@ class EQGPSApp(tk.Tk):
     def on_context_menu(self, event: tk.Event) -> None:
         self.context_world = self.screen_to_world(event.x, event.y)
         self.context_marker_id = self.find_marker_near_screen(event.x, event.y)
+        selected_marker_id = self.selected_marker_id()
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="Add Marker Here", command=self.add_marker_here)
+        if selected_marker_id and self.context_world:
+            menu.add_command(label="Move Selected Marker Here", command=self.move_selected_marker_here)
         if self.context_marker_id:
             menu.add_separator()
             menu.add_command(label="Set as Waypoint", command=self.set_context_marker_waypoint)
             menu.add_command(label="Edit Marker", command=self.edit_context_marker)
+            menu.add_command(label="Adjust Location...", command=self.adjust_context_marker_location)
             menu.add_command(label="Start Timer...", command=self.start_context_marker_timer)
             menu.add_command(label="Reset Timer", command=self.reset_context_marker_timer)
             menu.add_command(label="Clear Timer", command=self.clear_context_marker_timer)

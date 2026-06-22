@@ -160,6 +160,12 @@ def update_marker_details(
         marker.color = normalize_marker_color(color, default=marker.color)
 
 
+def move_marker(marker: "Marker", x: object, y: object) -> None:
+    """Move an existing marker without changing its label, notes, timer, or ID."""
+    marker.x = float(x)
+    marker.y = float(y)
+
+
 @dataclass
 class Marker:
     zone_key: str
